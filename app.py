@@ -1,93 +1,97 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
+import numpy as np
+import folium
+from streamlit_folium import st_folium
+import plotly.express as px
+from sklearn.linear_model import LinearRegression
+from datetime import datetime, timedelta
 
-# --- 1. Налаштування сторінки ---
-st.set_page_config(page_title="Система оцінки ризику підприємств", layout="wide")
+# 1. Налаштування сторінки
+st.set_page_config(page_title="Екологічна аналітика", layout="wide")
 
-# --- 2. Створення бази даних (CSV ознаки згідно з умовою) ---
+# 2. Генерація даних (API/CSV імітація)
 @st.cache_data
-def load_data():
-    # Фінансові (борг), Податкові (заборгованість), Публічні (суди) ознаки
-    data = {
-        'Назва підприємства': [
-            'ТОВ "Вектор"', 'ПП "Оріон"', 'АТ "Старт"', 
-            'ТОВ "Меркурій"', 'ПАТ "Зеніт"', 'ТОВ "Атлант"'
-        ],
-        'Борг (млн грн)': [0.2, 5.5, 1.1, 9.8, 0.05, 1.5],         # Фінансова ознака
-        'Податковий борг': [0, 1, 0, 1, 0, 0],                   # Податкова (0-ні, 1-так)
-        'Судові справи': [2, 18, 4, 35, 1, 6],                  # Публічна ознака
-        'Стаж (років)': [10, 2, 8, 1, 15, 7]
+def get_eco_data():
+    locations = {
+        'Київ': [50.45, 30.52],
+        'Дніпро': [48.46, 35.04],
+        'Запоріжжя': [47.83, 35.13],
+        'Кривий Ріг': [47.91, 33.39]
     }
+    
+    data = []
+    start_date = datetime.now() - timedelta(days=30)
+    
+    for city, coords in locations.items():
+        for i in range(30):
+            date = start_date + timedelta(days=i)
+            # Базовий рівень PM2.5 + випадкові коливання
+            pm_value = np.random.uniform(10, 80) if city != 'Кривий Ріг' else np.random.uniform(50, 120)
+            data.append({
+                'Дата': date,
+                'Місто': city,
+                'lat': coords[0],
+                'lon': coords[1],
+                'PM2.5': round(pm_value, 2)
+            })
     return pd.DataFrame(data)
 
-df = load_data()
+df = get_eco_data()
 
-# --- 3. Обчислення інтегрального індексу ризику ---
-def calculate_risk(row):
-    # Формула зі зваженими коефіцієнтами
-    score = (row['Борг (млн грн)'] * 5) + (row['Податковий борг'] * 35) + (row['Судові справи'] * 1.5) - (row['Стаж (років)'] * 1.5)
-    return int(min(max(score, 0), 100))
-
-df['Індекс ризику'] = df.apply(calculate_risk, axis=1)
-
-# --- 4. Інтерфейс ---
-st.title("🛡️ Система оцінки ризику підприємств")
+# 3. Інтерфейс
+st.title("🌱 Моніторинг та прогноз якості повітря (PM2.5)")
 st.markdown("---")
 
-# Вибір компанії
-selected_company = st.selectbox("Оберіть компанію для аналізу:", df['Назва підприємства'])
-c_data = df[df['Назва підприємства'] == selected_company].iloc[0]
-risk_score = c_data['Індекс ризику']
+# Карта забруднення
+st.subheader("📍 Карта поточного забруднення")
+latest_data = df[df['Дата'] == df['Дата'].max()]
 
-col1, col2 = st.columns([1, 1])
+m = folium.Map(location=[48.5, 31.2], zoom_start=6, tiles="cartodbpositron")
+
+for _, row in latest_data.iterrows():
+    # Колір залежно від рівня PM2.5 (ВООЗ рекомендує < 15)
+    color = 'green' if row['PM2.5'] < 25 else 'orange' if row['PM2.5'] < 50 else 'red'
+    
+    folium.CircleMarker(
+        location=[row['lat'], row['lon']],
+        radius=row['PM2.5']/3,
+        popup=f"{row['Місто']}: {row['PM2.5']} µg/m³",
+        color=color,
+        fill=True,
+        fill_opacity=0.6
+    ).add_to(m)
+
+st_folium(m, width=1000, height=500)
+
+# 4. Аналіз трендів
+st.markdown("---")
+col1, col2 = st.columns(2)
 
 with col1:
-    # --- 5. Візуалізація: Gauge-chart ---
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = risk_score,
-        title = {'text': f"Рівень ризику: {selected_company}"},
-        gauge = {
-            'axis': {'range': [0, 100]},
-            'bar': {'color': "black"},
-            'steps': [
-                {'range': [0, 40], 'color': "#2ecc71"},   # Низький (Зелений)
-                {'range': [40, 70], 'color': "#f1c40f"}, # Середній (Жовтий)
-                {'range': [70, 100], 'color': "#e74c3c"} # Високий (Червоний)
-            ],
-            'threshold': {
-                'line': {'color': "black", 'width': 4},
-                'value': risk_score
-            }
-        }
-    ))
+    st.subheader("📈 Аналіз трендів")
+    selected_city = st.selectbox("Оберіть місто для аналізу:", df['Місто'].unique())
+    city_df = df[df['Місто'] == selected_city]
+    fig = px.line(city_df, x='Дата', y='PM2.5', title=f"Динаміка PM2.5 у м. {selected_city}")
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    st.subheader("📋 Деталі перевірки")
-    st.write(f"**Фінансовий борг:** {c_data['Борг (млн грн)']} млн грн")
-    st.write(f"**Податковий борг:** {'⚠️ Є заборгованість' if c_data['Податковий борг'] == 1 else '✅ Відсутній'}")
-    st.write(f"**Судові справи:** {c_data['Судові справи']} проваджень")
+    # 5. Прогноз (Linear Regression)
+    st.subheader("🔮 Прогноз рівня PM2.5")
     
-    if risk_score > 70:
-        st.error("❗ ВИСОКИЙ РИЗИК: Рекомендується відмовити у співпраці.")
-    elif risk_score > 40:
-        st.warning("⚠️ СЕРЕДНІЙ РИЗИК: Потрібна додаткова перевірка документів.")
-    else:
-        st.success("✅ НИЗЬКИЙ РИЗИК: Контрагент надійний.")
-
-# --- 6. Підсвічування компаній з високим ризиком (Умова №4) ---
-st.markdown("---")
-st.subheader("📊 Повний реєстр з маркуванням ризиків")
-
-def highlight_risk(val):
-    if val > 70: return 'background-color: #ffcccc; color: #cc0000; font-weight: bold'
-    if val > 40: return 'background-color: #fff4cc'
-    return ''
-
-# Відображення таблиці з автоматичним підсвічуванням
-st.dataframe(
-    df.style.applymap(highlight_risk, subset=['Індекс ризику']),
-    use_container_width=True
-)
+    # Готуємо дані для моделі
+    city_df['days_from_start'] = (city_df['Дата'] - city_df['Дата'].min()).dt.days
+    X = city_df[['days_from_start']].values
+    y = city_df['PM2.5'].values
+    
+    model = LinearRegression().fit(X, y)
+    
+    # Прогноз на завтра
+    next_day = [[city_df['days_from_start'].max() + 1]]
+    prediction = model.predict(next_day)[0]
+    
+    st.metric(label=f"Очікуваний рівень завтра ({selected_city})", 
+              value=f"{round(prediction, 2)} µg/m³",
+              delta=f"{round(prediction - city_df['PM2.5'].iloc[-1], 2)} від сьогодні")
+    
+    st.write("Прогноз побудовано за допомогою моделі лінійної регресії на основі даних за останні 30 днів.")
